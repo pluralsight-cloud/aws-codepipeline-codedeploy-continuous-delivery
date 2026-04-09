@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Module 2 CodePipeline demo (Source, Build, Deploy)
+
+Parameters:
+  PipelineName:
+    Type: String
+    Default: GlobomanticsPipelineM2
+
+  DeveloperIamUserName:
+    Type: String
+    Default: cloud_user
+    Description: IAM username to grant CodeCommit git clone/push access
+
+  EnableDeveloperCodeCommitAccess:
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "true"
+    Description: Set to false if developer CodeCommit access is managed outside this stack
+
+  ExistingArtifactBucketName:
+    Type: String
+    Description: Existing artifact bucket accessible by CodeDeploy EC2 role
+
+  CodeDeployApplicationName:
+    Type: String
+    Default: GlobomanticsApp
+
+  CodeDeployDeploymentGroupName:
+    Type: String
+    Default: GlobomanticsDevelopment
+
+Conditions:
+  CreateDeveloperCodeCommitAccess: !Equals [!Ref EnableDeveloperCodeCommitAccess, "true"]
+
+Resources:
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: globomantics-pipeline-repo
+      RepositoryDescription: Source repository for Module 2 CodePipeline demo
+
+  DeveloperCodeCommitAccessPolicy:
+    Type: AWS::IAM::UserPolicy
+    Condition: CreateDeveloperCodeCommitAccess
+    Properties:
+      PolicyName: GlobomanticsCodeCommitDeveloperAccess
+      UserName: !Ref DeveloperIamUserName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - codecommit:GetRepository
+              - codecommit:GetBranch
+              - codecommit:ListBranches
+              - codecommit:GitPull
+              - codecommit:GitPush
+            Resource: !GetAtt CodeCommitRepository.Arn
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GlobomanticsCodeBuildRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ExistingArtifactBucketName}"
+                  - !Sub "arn:aws:s3:::${ExistingArtifactBucketName}/*"
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: GlobomanticsBuildM2
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: false
+      Source:
+        Type: CODEPIPELINE
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GlobomanticsCodePipelineRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ExistingArtifactBucketName}"
+                  - !Sub "arn:aws:s3:::${ExistingArtifactBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - codecommit:GetRepository
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:CancelUploadArchive
+                Resource: !GetAtt CodeCommitRepository.Arn
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt CodeBuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                Resource: "*"
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref PipelineName
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ExistingArtifactBucketName
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: "1"
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !GetAtt CodeCommitRepository.Name
+                BranchName: main
+                PollForSourceChanges: true
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: "1"
+              InputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplicationName
+                DeploymentGroupName: !Ref CodeDeployDeploymentGroupName
+              RunOrder: 1
+
+Outputs:
+  CodeCommitRepositoryName:
+    Value: !GetAtt CodeCommitRepository.Name
+  CodeCommitCloneUrlHttp:
+    Value: !GetAtt CodeCommitRepository.CloneUrlHttp
+  PipelineName:
+    Value: !Ref CodePipeline
+  ArtifactBucketName:
+    Value: !Ref ExistingArtifactBucketName
