@@ -1,0 +1,12 @@
+{
+  "name": "globomantics-pipeline-app",
+  "version": "2.1.0",
+  "description": "Globomantics sample app for CodePipeline + CodeDeploy demo",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
