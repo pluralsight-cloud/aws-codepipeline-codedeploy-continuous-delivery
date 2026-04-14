@@ -1,0 +1,24 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Install phase started"
+      - npm install --omit=dev
+  build:
+    commands:
+      - echo "Build phase started on $(date)"
+      - command_that_does_not_exist_for_demo
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - app.js
+    - package.json
+    - appspec.yml
+    - scripts/**/*
+  discard-paths: no
